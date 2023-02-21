@@ -1,12 +1,16 @@
 use crate::{format_context::FormatContext, frame::Frame, packet::Packet, tools};
 use ffmpeg_sys_next::*;
-use std::{ffi::CString, ptr::null_mut};
+use std::{
+  ffi::CString,
+  ptr::{null, null_mut},
+};
 
 #[derive(Debug)]
 pub struct VideoDecoder {
   pub identifier: String,
   pub stream_index: isize,
   pub codec_context: *mut AVCodecContext,
+  pub pixel_format: AVPixelFormat,
 }
 
 impl VideoDecoder {
@@ -19,6 +23,14 @@ impl VideoDecoder {
       let codec = avcodec_find_decoder(format.get_codec_id(stream_index));
       let mut codec_context = avcodec_alloc_context3(codec);
 
+      let hw_configs = get_hw_configs(codec_context);
+      println!("Available hw_configs: {:?}", hw_configs);
+      let picked_hw_config = hw_configs[0];
+      println!("Picked hw_config: {:?}", picked_hw_config);
+
+      let codec = (*codec_context).codec;
+      let mut hw_device_ctx = null_mut();
+
       check_result!(
         avcodec_parameters_to_context(
           codec_context,
@@ -28,6 +40,18 @@ impl VideoDecoder {
           avcodec_free_context(&mut codec_context);
         }
       );
+
+      (*codec_context).get_format = Some(find_pixel_format);
+
+      av_hwdevice_ctx_create(
+        &mut hw_device_ctx,
+        picked_hw_config.0,
+        null(),
+        null_mut(),
+        0,
+      );
+      (*codec_context).hw_device_ctx = av_buffer_ref(hw_device_ctx as _);
+
       check_result!(avcodec_open2(codec_context, codec, null_mut()), {
         avcodec_free_context(&mut codec_context);
       });
@@ -36,6 +60,7 @@ impl VideoDecoder {
         identifier,
         stream_index,
         codec_context,
+        pixel_format: picked_hw_config.1,
       })
     }
   }
@@ -62,6 +87,7 @@ impl VideoDecoder {
         identifier,
         stream_index,
         codec_context,
+        pixel_format: AVPixelFormat::AV_PIX_FMT_NONE,
       })
     }
   }
@@ -137,4 +163,32 @@ impl Drop for VideoDecoder {
       }
     }
   }
+}
+
+unsafe extern "C" fn find_pixel_format(
+  ctx: *mut ffmpeg_sys_next::AVCodecContext,
+  _: *const ffmpeg_sys_next::AVPixelFormat,
+) -> AVPixelFormat {
+  get_hw_configs(ctx)[0].1
+}
+
+unsafe fn get_hw_configs(
+  ctx: *mut ffmpeg_sys_next::AVCodecContext,
+) -> Vec<(AVHWDeviceType, AVPixelFormat)> {
+  let mut hw_configs = vec![];
+  let mut i = 0;
+  loop {
+    let config = avcodec_get_hw_config((*ctx).codec, i);
+
+    if config.is_null() {
+      break;
+    }
+
+    if (*config).methods != 0 {
+      hw_configs.push(((*config).device_type, (*config).pix_fmt));
+      // hw_pix_fmt = ;
+    }
+    i += 1;
+  }
+  hw_configs
 }
