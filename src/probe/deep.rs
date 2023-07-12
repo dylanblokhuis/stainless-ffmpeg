@@ -2,18 +2,23 @@ use crate::format_context::FormatContext;
 use crate::probe::black_and_silence::detect_black_and_silence;
 use crate::probe::black_detect::detect_black_frames;
 use crate::probe::crop_detect::detect_black_borders;
+use crate::probe::dualmono_detect::detect_dualmono;
+use crate::probe::loudness_detect::detect_loudness;
 use crate::probe::ocr_detect::detect_ocr;
 use crate::probe::scene_detect::detect_scene;
 use crate::probe::silence_detect::detect_silence;
+use crate::probe::sine_detect::detect_sine;
 use crate::stream::Stream;
 use ffmpeg_sys_next::*;
 use log::LevelFilter;
 use std::{cmp, collections::HashMap, fmt};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 pub struct DeepProbe {
   #[serde(skip_serializing)]
   filename: String,
+  id: Uuid,
   pub result: Option<DeepProbeResult>,
 }
 
@@ -71,6 +76,26 @@ pub struct OcrResult {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct LoudnessResult {
+  pub integrated: f64,
+  pub range: f64,
+  pub true_peaks: Vec<f64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct DualMonoResult {
+  pub start: i64,
+  pub end: i64,
+}
+
+#[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct SineResult {
+  pub channel: u8,
+  pub start: i64,
+  pub end: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct StreamProbeResult {
   stream_index: usize,
   count_packets: usize,
@@ -81,30 +106,42 @@ pub struct StreamProbeResult {
   pub color_primaries: Option<String>,
   pub color_trc: Option<String>,
   pub color_matrix: Option<String>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_silence: Vec<SilenceResult>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_silence: Option<Vec<SilenceResult>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub silent_stream: Option<bool>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_black: Vec<BlackResult>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_crop: Vec<CropResult>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_scene: Vec<SceneResult>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_false_scene: Vec<FalseSceneResult>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub detected_ocr: Vec<OcrResult>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_black: Option<Vec<BlackResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_crop: Option<Vec<CropResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_scene: Option<Vec<SceneResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_false_scene: Option<Vec<FalseSceneResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_ocr: Option<Vec<OcrResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_loudness: Option<Vec<LoudnessResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_dualmono: Option<Vec<DualMonoResult>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detected_bitrate: Option<i64>,
-  #[serde(skip_serializing_if = "Vec::is_empty")]
-  pub black_and_silence: Vec<BlackAndSilenceResult>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_black_and_silence: Option<Vec<BlackAndSilenceResult>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detected_sine: Option<Vec<SineResult>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct FormatProbeResult {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detected_bitrate_format: Option<i64>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, Eq, Hash)]
+pub struct Track {
+  pub index: u8,
+  pub channel: u8,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -119,6 +156,8 @@ pub struct CheckParameterValue {
   pub den: Option<u64>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub th: Option<f64>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub pairs: Option<Vec<Vec<Track>>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -129,6 +168,9 @@ pub struct DeepProbeCheck {
   pub crop_detect: Option<HashMap<String, CheckParameterValue>>,
   pub scene_detect: Option<HashMap<String, CheckParameterValue>>,
   pub ocr_detect: Option<HashMap<String, CheckParameterValue>>,
+  pub loudness_detect: Option<HashMap<String, CheckParameterValue>>,
+  pub dualmono_detect: Option<HashMap<String, CheckParameterValue>>,
+  pub sine_detect: Option<HashMap<String, CheckParameterValue>>,
 }
 
 impl fmt::Display for DeepProbeResult {
@@ -168,7 +210,7 @@ impl fmt::Display for DeepProbeResult {
       writeln!(
         f,
         "{:30} : {:?}",
-        "Black and silence detection", stream.black_and_silence
+        "Black and silence detection", stream.detected_black_and_silence
       )?;
       writeln!(f, "{:30} : {:?}", "Crop detection", stream.detected_crop)?;
       writeln!(f, "{:30} : {:?}", "Scene detection", stream.detected_scene)?;
@@ -182,6 +224,17 @@ impl fmt::Display for DeepProbeResult {
         "{:30} : {:?}",
         "Media offline detection", stream.detected_ocr
       )?;
+      writeln!(
+        f,
+        "{:30} : {:?}",
+        "Loudness detection", stream.detected_loudness
+      )?;
+      writeln!(
+        f,
+        "{:30} : {:?}",
+        "DualMono detection", stream.detected_dualmono,
+      )?;
+      writeln!(f, "{:30} : {:?}", "1000Hz detection", stream.detected_sine)?;
       writeln!(
         f,
         "{:30} : {:?}",
@@ -204,14 +257,17 @@ impl StreamProbeResult {
       color_matrix: None,
       min_packet_size: std::i32::MAX,
       max_packet_size: std::i32::MIN,
-      detected_silence: vec![],
+      detected_silence: None,
       silent_stream: None,
-      detected_black: vec![],
-      black_and_silence: vec![],
-      detected_crop: vec![],
-      detected_scene: vec![],
-      detected_false_scene: vec![],
-      detected_ocr: vec![],
+      detected_black: None,
+      detected_black_and_silence: None,
+      detected_crop: None,
+      detected_scene: None,
+      detected_false_scene: None,
+      detected_ocr: None,
+      detected_loudness: None,
+      detected_dualmono: None,
+      detected_sine: None,
       detected_bitrate: None,
     }
   }
@@ -225,10 +281,30 @@ impl FormatProbeResult {
   }
 }
 
+impl Track {
+  pub fn new(ind: u8, ch: u8) -> Self {
+    Track {
+      index: ind,
+      channel: ch,
+    }
+  }
+  pub fn get_channels_number(pairing_list: Vec<Vec<Track>>, ind: u8) -> u8 {
+    for tracks in pairing_list.iter() {
+      for track in tracks {
+        if track.index == ind {
+          return track.channel;
+        }
+      }
+    }
+    0
+  }
+}
+
 impl DeepProbe {
-  pub fn new(filename: &str) -> Self {
+  pub fn new(filename: &str, id: Uuid) -> Self {
     DeepProbe {
       filename: filename.to_owned(),
+      id,
       result: None,
     }
   }
@@ -291,7 +367,7 @@ impl DeepProbe {
       }
     }
 
-    if let Some(silence_parameters) = check.silence_detect {
+    if let Some(silence_parameters) = check.silence_detect.clone() {
       detect_silence(
         &self.filename,
         &mut streams,
@@ -300,7 +376,7 @@ impl DeepProbe {
       );
     }
 
-    if let Some(black_parameters) = check.black_detect {
+    if let Some(black_parameters) = check.black_detect.clone() {
       detect_black_frames(
         &self.filename,
         &mut streams,
@@ -310,12 +386,14 @@ impl DeepProbe {
     }
 
     if let Some(black_and_silence_parameters) = check.black_and_silence_detect {
-      detect_black_and_silence(
-        &mut streams,
-        video_indexes.clone(),
-        audio_indexes,
-        black_and_silence_parameters,
-      );
+      if check.black_detect.is_some() && check.silence_detect.is_some() {
+        detect_black_and_silence(
+          &mut streams,
+          video_indexes.clone(),
+          audio_indexes.clone(),
+          black_and_silence_parameters,
+        );
+      }
     }
 
     if let Some(crop_parameters) = check.crop_detect {
@@ -335,6 +413,7 @@ impl DeepProbe {
         scene_parameters,
       );
     }
+
     if let Some(ocr_parameters) = check.ocr_detect {
       detect_ocr(
         &self.filename,
@@ -350,6 +429,28 @@ impl DeepProbe {
       }
     }
 
+    if let Some(loudness_parameters) = check.loudness_detect {
+      detect_loudness(
+        &self.filename,
+        &mut streams,
+        audio_indexes.clone(),
+        loudness_parameters,
+      );
+    }
+
+    if let Some(dualmono_parameters) = check.dualmono_detect {
+      detect_dualmono(
+        &self.filename,
+        &mut streams,
+        audio_indexes.clone(),
+        dualmono_parameters,
+      );
+    }
+
+    if let Some(sine_parameters) = check.sine_detect {
+      detect_sine(&self.filename, &mut streams, audio_indexes, sine_parameters);
+    }
+
     let mut format = FormatProbeResult::new();
     format.detected_bitrate_format = context.get_bit_rate();
 
@@ -361,29 +462,162 @@ impl DeepProbe {
 }
 
 #[test]
-fn deep_probe_mxf_sample() {
+fn deep_probe() {
   // use serde_json;
   use std::collections::HashMap;
+  use uuid::Uuid;
 
-  let mut probe = DeepProbe::new("tests/PAL_1080i_MPEG_XDCAM-HD_colorbar.mxf");
-  let mut params = HashMap::new();
-  let duration = CheckParameterValue {
-    min: Some(2000),
+  let duration_params = CheckParameterValue {
+    min: Some(40),
+    max: Some(20000),
+    num: None,
+    den: None,
+    th: None,
+    pairs: None,
+  };
+  let black_duration_params = CheckParameterValue {
+    min: Some(40),
+    max: Some(20000),
+    num: None,
+    den: None,
+    th: None,
+    pairs: None,
+  };
+  let black_pixel_params = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: Some(0.1),
+    pairs: None,
+  };
+  let black_picture_params = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: Some(0.98),
+    pairs: None,
+  };
+  let spot_check = CheckParameterValue {
+    min: None,
+    max: Some(5),
+    num: None,
+    den: None,
+    th: None,
+    pairs: None,
+  };
+  let black_and_silence_check = CheckParameterValue {
+    min: Some(40),
     max: None,
     num: None,
     den: None,
     th: None,
+    pairs: None,
   };
-  params.insert("duration".to_string(), duration);
-  let check_list = DeepProbeCheck {
-    silence_detect: Some(params),
-    ..Default::default()
+  let mut audio_qualif = vec![];
+  // definition : [Track::new(stream_index, channels_number)]
+  audio_qualif.push([Track::new(1, 1)].to_vec());
+  audio_qualif.push([Track::new(2, 1)].to_vec());
+  audio_qualif.push([Track::new(3, 8)].to_vec());
+  audio_qualif.push([Track::new(4, 2)].to_vec());
+  audio_qualif.push([Track::new(5, 2)].to_vec());
+  audio_qualif.push([Track::new(6, 1), Track::new(7, 1)].to_vec()); //dualmono
+  let loudness_check = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: None,
+    pairs: Some(audio_qualif.clone()),
   };
-  probe.process(LevelFilter::Error, check_list).unwrap();
+  let dualmono_duration_check = CheckParameterValue {
+    min: Some(100),
+    max: None,
+    num: None,
+    den: None,
+    th: None,
+    pairs: None,
+  };
+  let dualmono_qualif_check = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: None,
+    pairs: Some(audio_qualif.clone()),
+  };
+  let scene_check = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: Some(10.0),
+    pairs: None,
+  };
+  let ocr_check = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: Some(14.0),
+    pairs: None,
+  };
+  let sine_check = CheckParameterValue {
+    min: Some(100),
+    max: None,
+    num: None,
+    den: None,
+    th: None,
+    pairs: None,
+  };
+  let sine_qualif_check = CheckParameterValue {
+    min: None,
+    max: None,
+    num: None,
+    den: None,
+    th: None,
+    pairs: Some(audio_qualif),
+  };
 
-  // println!("{}", serde_json::to_string(&probe).unwrap());
-
-  // let content = std::fs::read_to_string("tests/deep_probe.json").unwrap();
-  // let reference: DeepProbe = serde_json::from_str(&content).unwrap();
-  // assert_eq!(probe, reference);
+  let mut silence_params = HashMap::new();
+  let mut black_params = HashMap::new();
+  let mut select_params = HashMap::new();
+  let mut black_and_silence_params = HashMap::new();
+  let mut scene_params = HashMap::new();
+  let mut ocr_params = HashMap::new();
+  let mut loudness_params = HashMap::new();
+  let mut dualmono_params = HashMap::new();
+  let mut sine_params = HashMap::new();
+  silence_params.insert("duration".to_string(), duration_params);
+  black_params.insert("duration".to_string(), black_duration_params);
+  black_params.insert("picture".to_string(), black_picture_params);
+  black_params.insert("pixel".to_string(), black_pixel_params);
+  select_params.insert("spot_check".to_string(), spot_check);
+  loudness_params.insert("pairing_list".to_string(), loudness_check);
+  dualmono_params.insert("duration".to_string(), dualmono_duration_check.clone());
+  dualmono_params.insert("pairing_list".to_string(), dualmono_qualif_check.clone());
+  black_and_silence_params.insert("duration".to_string(), black_and_silence_check);
+  scene_params.insert("threshold".to_string(), scene_check);
+  ocr_params.insert("threshold".to_string(), ocr_check);
+  sine_params.insert("duration".to_string(), sine_check);
+  sine_params.insert("pairing_list".to_string(), sine_qualif_check);
+  let check = DeepProbeCheck {
+    silence_detect: Some(silence_params),
+    black_detect: Some(black_params),
+    crop_detect: Some(select_params),
+    black_and_silence_detect: Some(black_and_silence_params),
+    scene_detect: Some(scene_params),
+    ocr_detect: None,
+    loudness_detect: Some(loudness_params),
+    dualmono_detect: Some(dualmono_params),
+    sine_detect: Some(sine_params),
+  };
+  let id = Uuid::parse_str("ef7e3ad9-a08f-4cd0-9fec-3ac465bbdd85").unwrap();
+  let mut probe = DeepProbe::new("tests/test_file.mxf", id);
+  probe.process(LevelFilter::Error, check).unwrap();
+  println!("{}", serde_json::to_string(&probe).unwrap());
+  let content = std::fs::read_to_string("tests/deep_probe.json").unwrap();
+  let reference: DeepProbe = serde_json::from_str(&content).unwrap();
+  assert_eq!(probe, reference);
 }
