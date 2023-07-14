@@ -43,11 +43,18 @@ fn main() {
         None
       }
     }
+    60 => {
+      if avcodec_version_minor >= 0 {
+        Some("ffmpeg_6_0")
+      } else {
+        None
+      }
+    }
     _ => None,
   };
 
   if let Some(ffmpeg_version) = ffmpeg_version {
-    // println!("cargo:warning={}", ffmpeg_version);
+    println!("cargo:warning={}", ffmpeg_version);
     println!("cargo:rustc-cfg={ffmpeg_version}");
   } else {
     panic!(

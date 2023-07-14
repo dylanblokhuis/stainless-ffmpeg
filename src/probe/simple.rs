@@ -55,7 +55,7 @@ pub struct VideoProperties {
   profile: Option<String>,
   scanning_type: Option<String>,
   chroma_subsampling: Option<String>,
-  timecode: Option<String>,
+  timebase: Option<String>,
   pix_fmt: Option<String>,
   nb_frames: Option<i64>,
 }
@@ -113,7 +113,7 @@ impl fmt::Display for Format {
           "{:30} : {:?}",
           "Chroma subsampling", vp.chroma_subsampling
         )?;
-        writeln!(f, "{:30} : {:?}", "Timecode", vp.timecode)?;
+        writeln!(f, "{:30} : {:?}", "Timebase", vp.timebase)?;
         writeln!(f, "{:30} : {:?}", "Pixel format", vp.pix_fmt)?;
         writeln!(f, "{:30} : {:?}", "Number of frames", vp.nb_frames)?;
       }
@@ -200,7 +200,7 @@ impl Probe {
             let chroma_subsampling = stream.get_chroma_sub_sample();
             let level = stream.get_level();
             let profile = stream.get_profile();
-            let timecode = stream.get_timecode();
+            let timebase = Some(stream.get_time_base().to_string());
             let pix_fmt = stream.get_pix_fmt_name();
             let nb_frames = stream.get_nb_frames();
 
@@ -213,7 +213,7 @@ impl Probe {
               profile,
               scanning_type,
               chroma_subsampling,
-              timecode,
+              timebase,
               pix_fmt,
               nb_frames,
             });
