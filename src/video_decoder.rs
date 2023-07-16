@@ -10,7 +10,7 @@ pub struct VideoDecoder {
   pub identifier: String,
   pub stream_index: isize,
   pub codec_context: *mut AVCodecContext,
-  pub pixel_format: AVPixelFormat,
+  pub hw_pixel_format: Option<AVPixelFormat>,
 }
 
 impl VideoDecoder {
@@ -60,7 +60,7 @@ impl VideoDecoder {
         identifier,
         stream_index,
         codec_context,
-        pixel_format: picked_hw_config.1,
+        hw_pixel_format: Some(picked_hw_config.1),
       })
     }
   }
@@ -87,7 +87,7 @@ impl VideoDecoder {
         identifier,
         stream_index,
         codec_context,
-        pixel_format: AVPixelFormat::AV_PIX_FMT_NONE,
+        hw_pixel_format: Some(AVPixelFormat::AV_PIX_FMT_NONE),
       })
     }
   }
@@ -186,7 +186,6 @@ unsafe fn get_hw_configs(
 
     if (*config).methods != 0 {
       hw_configs.push(((*config).device_type, (*config).pix_fmt));
-      // hw_pix_fmt = ;
     }
     i += 1;
   }
