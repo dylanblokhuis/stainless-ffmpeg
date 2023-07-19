@@ -54,7 +54,6 @@ fn main() {
   };
 
   if let Some(ffmpeg_version) = ffmpeg_version {
-    println!("cargo:warning={}", ffmpeg_version);
     println!("cargo:rustc-cfg={ffmpeg_version}");
   } else {
     panic!(
