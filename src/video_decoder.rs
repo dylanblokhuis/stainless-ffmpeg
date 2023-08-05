@@ -24,9 +24,9 @@ impl VideoDecoder {
       let mut codec_context = avcodec_alloc_context3(codec);
 
       let hw_configs = get_hw_configs(codec_context);
-      println!("Available hw_configs: {:?}", hw_configs);
+      log::debug!("Available hw_configs: {:?}", hw_configs);
       let picked_hw_config = hw_configs[0];
-      println!("Picked hw_config: {:?}", picked_hw_config);
+      log::debug!("Picked hw_config: {:?}", picked_hw_config);
 
       let codec = (*codec_context).codec;
       let mut hw_device_ctx = null_mut();
