@@ -18,18 +18,11 @@ impl VideoDecoder {
     identifier: String,
     format: &FormatContext,
     stream_index: isize,
+    hw_accel: bool,
   ) -> Result<Self, String> {
     unsafe {
       let codec = avcodec_find_decoder(format.get_codec_id(stream_index));
       let mut codec_context = avcodec_alloc_context3(codec);
-
-      let hw_configs = get_hw_configs(codec_context);
-      log::debug!("Available hw_configs: {:?}", hw_configs);
-      let picked_hw_config = hw_configs[0];
-      log::debug!("Picked hw_config: {:?}", picked_hw_config);
-
-      let codec = (*codec_context).codec;
-      let mut hw_device_ctx = null_mut();
 
       check_result!(
         avcodec_parameters_to_context(
@@ -41,16 +34,27 @@ impl VideoDecoder {
         }
       );
 
-      (*codec_context).get_format = Some(find_pixel_format);
+      let hw_pixel_format = if hw_accel {
+        let hw_configs = get_hw_configs(codec_context);
+        log::debug!("Available hw_configs: {:?}", hw_configs);
+        let picked_hw_config = hw_configs[0];
+        log::debug!("Picked hw_config: {:?}", picked_hw_config);
 
-      av_hwdevice_ctx_create(
-        &mut hw_device_ctx,
-        picked_hw_config.0,
-        null(),
-        null_mut(),
-        0,
-      );
-      (*codec_context).hw_device_ctx = av_buffer_ref(hw_device_ctx as _);
+        let mut hw_device_ctx = null_mut();
+        (*codec_context).get_format = Some(find_pixel_format);
+
+        av_hwdevice_ctx_create(
+          &mut hw_device_ctx,
+          picked_hw_config.0,
+          null(),
+          null_mut(),
+          0,
+        );
+        (*codec_context).hw_device_ctx = av_buffer_ref(hw_device_ctx as _);
+        Some(picked_hw_config.1)
+      } else {
+        None
+      };
 
       check_result!(avcodec_open2(codec_context, codec, null_mut()), {
         avcodec_free_context(&mut codec_context);
@@ -60,7 +64,7 @@ impl VideoDecoder {
         identifier,
         stream_index,
         codec_context,
-        hw_pixel_format: Some(picked_hw_config.1),
+        hw_pixel_format,
       })
     }
   }

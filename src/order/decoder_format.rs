@@ -68,7 +68,7 @@ impl DecoderFormat {
           match context.get_stream_type(stream.index as isize) {
             AVMediaType::AVMEDIA_TYPE_VIDEO => {
               let video_decoder =
-                VideoDecoder::new(identifier.clone(), &context, stream.index as isize)?;
+                VideoDecoder::new(identifier.clone(), &context, stream.index as isize, true)?;
               graph.add_input_from_video_decoder(&identifier, &video_decoder)?;
               video_decoders.push(video_decoder);
             }
